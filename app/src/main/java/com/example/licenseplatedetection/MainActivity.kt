@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import com.example.licenseplatedetection.Constants.LABELS_PATH
 import com.example.licenseplatedetection.Constants.MODEL_PATH
 import com.example.licenseplatedetection.databinding.ActivityMainBinding
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -38,6 +39,8 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
 
 
     private lateinit var cameraExecutor: ExecutorService
+
+    private val results = mutableSetOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -195,6 +198,47 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
 
     override fun onTextRecognized(boundingBox: BoundingBox, text: String) {
         runOnUiThread {
+            Log.e("TESTING", "text = $text")
+            val r = text.uppercase(Locale("en", "US")).filterNot { it.isWhitespace() }
+            if (r.length != 6 && r.length != 8 && r.length != 9) return@runOnUiThread
+            if (r.length == 6) {
+                if (
+                    !r[0].isLetter() ||
+                    !r[1].isDigit() ||
+                    !r[2].isDigit() ||
+                    !r[3].isDigit() ||
+                    !r[4].isLetter() ||
+                    !r[5].isLetter()
+                ) return@runOnUiThread
+            }
+            if (r.length == 8) {
+                if (
+                    !r[0].isLetter() ||
+                    !r[1].isDigit() ||
+                    !r[2].isDigit() ||
+                    !r[3].isDigit() ||
+                    !r[4].isLetter() ||
+                    !r[5].isLetter() ||
+                    !r[6].isDigit() ||
+                    !r[7].isDigit()
+                ) return@runOnUiThread
+            }
+            if (r.length == 9) {
+                if (
+                    !r[0].isLetter() ||
+                    !r[1].isDigit() ||
+                    !r[2].isDigit() ||
+                    !r[3].isDigit() ||
+                    !r[4].isLetter() ||
+                    !r[5].isLetter() ||
+                    !r[6].isDigit() ||
+                    !r[7].isDigit() ||
+                    !r[8].isDigit()
+                ) return@runOnUiThread
+            }
+
+            results.add(r)
+            binding.numbers.text = results.joinToString("\n")
             binding.overlay.updatePlateText(boundingBox, text)
         }
     }
