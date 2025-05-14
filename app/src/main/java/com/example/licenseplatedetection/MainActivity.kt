@@ -1,29 +1,42 @@
 package com.example.licenseplatedetection
 
 import android.Manifest
+import android.app.Activity
+import android.content.ContentUris
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
+import android.util.Size
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.licenseplatedetection.Constants.LABELS_PATH
 import com.example.licenseplatedetection.Constants.MODEL_PATH
 import com.example.licenseplatedetection.databinding.ActivityMainBinding
+import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecognizer.TextRecognizerListener {
+class MainActivity : AppCompatActivity(), Detector.DetectorListener,
+    TextRecognizer.TextRecognizerListener {
     private lateinit var binding: ActivityMainBinding
     private var currentBitmap: Bitmap? = null
 
@@ -47,29 +60,133 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        detector = Detector(baseContext, MODEL_PATH, LABELS_PATH, this)
-        detector.setup()
-        textRecognizer = TextRecognizer(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            detector = Detector(baseContext, MODEL_PATH, LABELS_PATH, this)
+            detector.setup()
+            textRecognizer = TextRecognizer(this, this)
 
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
-            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+            if (allPermissionsGranted()) {
+                startCamera()
+            } else {
+                ActivityCompat.requestPermissions(
+                    this,
+                    REQUIRED_PERMISSIONS,
+                    REQUEST_CODE_PERMISSIONS
+                )
+            }
+
+            cameraExecutor = Executors.newSingleThreadExecutor()
+
+            binding.btnFile.setOnClickListener {
+                one()
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        Log.e("TESTING", "$requestCode, $resultCode, $data")
+        if (requestCode == 100 && resultCode == Activity.RESULT_OK) {
+            val projection =
+                arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME)
+            val cursor = contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                null,
+                null,
+                null
+            )
+            cursor?.use {
+                while (it.moveToNext()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Images.Media._ID))
+                    val name =
+                        it.getString(it.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME))
+                    val uri =
+                        ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    Log.e("TESTING", "$id, $name, $uri")
+                }
+            }
+
+            data?.data?.let { path ->
+//                val outputDir = File(Environment.getExternalStorageDirectory(), "TestVideoFrames")
+//                if (!outputDir.exists()) {
+//                    outputDir.mkdirs()
+//                }
+
+                extractFrames(path)
+            }
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun extractFrames(path: Uri) {
+        val retriever = MediaMetadataRetriever()
+        retriever.setDataSource(this, path)
+
+//        val bitmap = retriever.getFrameAtTime(1_000_000)
+//        if (bitmap != null) {
+//            val frameFile = File(this.cacheDir, "x_1_000_000.jpeg")
+//            FileOutputStream(frameFile).use {
+//                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, it)
+//            }
+//            bitmap.recycle()
+//        }
+
+        val duration =
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                ?: 0
+        val frameRate =
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)
+                ?.toIntOrNull() ?: 0
+        Log.e("TESTING", "duration = $duration, rate = $frameRate")
+
+        val timeInterval = duration / frameRate
+        (0..frameRate).forEach {
+            val x = it * timeInterval * 1000
+            Log.e("TESTING", "$x")
+            val bitmap: Bitmap? = retriever.getFrameAtTime(x, MediaMetadataRetriever.OPTION_CLOSEST)
+            if (bitmap != null) {
+                val name = "frame_${x}.jpeg"
+//                val frameFile = File(this.cacheDir, name)
+                Log.e("TESTING", name)
+                detector.detect(bitmap)
+//                FileOutputStream(frameFile).use {
+//                    bitmap.compress(Bitmap.CompressFormat.JPEG, 100, it)
+//                }
+//                bitmap.recycle()
+            }
         }
 
-        cameraExecutor = Executors.newSingleThreadExecutor()
+        retriever.release()
+    }
+
+    private fun one() {
+//        val checked = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+//        if (checked != PackageManager.PERMISSION_GRANTED) {
+//            ActivityCompat.requestPermissions(
+//                this,
+//                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+//                1
+//            )
+//        } else {
+        val intent = Intent(Intent.ACTION_PICK, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+        startActivityForResult(intent, 100)
+//        }
     }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            cameraProvider  = cameraProviderFuture.get()
+            cameraProvider = cameraProviderFuture.get()
             bindCameraUseCases()
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun bindCameraUseCases() {
-        val cameraProvider = cameraProvider ?: throw IllegalStateException("Camera initialization failed.")
+        val cameraProvider =
+            cameraProvider ?: throw IllegalStateException("Camera initialization failed.")
 
         val rotation = binding.viewFinder.display.rotation
 
@@ -78,19 +195,46 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
             .requireLensFacing(CameraSelector.LENS_FACING_BACK)
             .build()
 
+        val cameraInfo = cameraProvider.getCameraInfo(cameraSelector)
+//        Log.e("TESTING", "${cameraInfo.cameraState.value.}")
+
         preview = Preview.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(1920, 1080),  // Желаемое разрешение (Full HD)
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER  // Правило выбора
+                        )
+                    )
+                    .build()
+//                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+//                    .build()
+            )
             .setTargetRotation(rotation)
             .build()
 
         imageAnalyzer = ImageAnalysis.Builder()
-            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(1920, 1080),  // Желаемое разрешение (Full HD)
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER  // Правило выбора
+                        )
+                    )
+                    .build()
+//                ResolutionSelector.Builder()
+//                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+//                    .build()
+            )
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setTargetRotation(binding.viewFinder.display.rotation)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .build()
 
         imageAnalyzer?.setAnalyzer(cameraExecutor) { imageProxy ->
+            Log.e("TESTING", "${imageProxy.height}x${imageProxy.width}")
             val bitmapBuffer = Bitmap.createBitmap(
                 imageProxy.width,
                 imageProxy.height,
@@ -132,7 +276,7 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
             )
 
             preview?.setSurfaceProvider(binding.viewFinder.surfaceProvider)
-        } catch(exc: Exception) {
+        } catch (exc: Exception) {
             Log.e(TAG, "Use case binding failed", exc)
         }
     }
@@ -142,7 +286,8 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
         if (permissions[Manifest.permission.CAMERA] == true) {
             startCamera()
         } else {
@@ -160,7 +305,7 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
 
     override fun onResume() {
         super.onResume()
-        if (allPermissionsGranted()){
+        if (allPermissionsGranted()) {
             startCamera()
         } else {
             requestPermissionLauncher.launch(REQUIRED_PERMISSIONS)
@@ -170,7 +315,7 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
     companion object {
         private const val TAG = "Camera"
         private const val REQUEST_CODE_PERMISSIONS = 10
-        private val REQUIRED_PERMISSIONS = mutableListOf (
+        private val REQUIRED_PERMISSIONS = mutableListOf(
             Manifest.permission.CAMERA
         ).toTypedArray()
     }
@@ -182,6 +327,7 @@ class MainActivity : AppCompatActivity(), Detector.DetectorListener, TextRecogni
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onDetect(boundingBoxes: List<BoundingBox>, inferenceTime: Long) {
         val bitmap = currentBitmap
         if (bitmap != null) {
